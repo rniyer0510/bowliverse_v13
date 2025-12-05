@@ -1,0 +1,138 @@
+"""
+Bowliverse v13.4 — Biomech Stage (Elbow Extension + Release Height + Plane Detection)
+
+Changes in v13.4:
+- FIXED: extension_error_margin_deg must be float (not string "±6°")
+- Cleaned angle computation with fallback handling
+- Stable plane detection (xy vs zy) based on elbow–wrist–shoulder axis
+- No hardcoding except small biomechanical tolerances
+- Fully aligned with events: RELEASE, UAH, FFC, BFC
+"""
+
+import numpy as np
+from app.models.context import Context
+from app.models.biomech_model import BiomechElbowModel, ReleaseHeightModel, AnglePlaneModel
+
+
+# -----------------------------------------------------
+# Utility
+# -----------------------------------------------------
+
+def _angle(a, b, c):
+    """Angle ABC in degrees."""
+    ab = a - b
+    cb = c - b
+    den = (np.linalg.norm(ab) * np.linalg.norm(cb)) + 1e-9
+    val = float(np.dot(ab, cb) / den)
+    val = max(-1.0, min(1.0, val))
+    return float(np.degrees(np.arccos(val)))
+
+
+def _detect_plane(vec):
+    """
+    Identify whether movement is mostly in XY or ZY plane.
+    Decision: whichever vector component (x or z) is smaller variation.
+    """
+    vx, vy, vz = abs(vec[0]), abs(vec[1]), abs(vec[2])
+    return "xy" if vx > vz else "zy"
+
+
+# -----------------------------------------------------
+# Main Biomech Computation
+# -----------------------------------------------------
+
+def run(ctx: Context) -> Context:
+    events = ctx.events
+    frames = ctx.pose.frames
+
+    if events.release is None or events.uah is None:
+        ctx.biomech.error = "Missing key event frames"
+        return ctx
+
+    rel_idx = events.release.frame
+    uah_idx = events.uah.frame
+
+    try:
+        rel_frame = frames[rel_idx]
+        uah_frame = frames[uah_idx]
+    except Exception:
+        ctx.biomech.error = "Event index out of bounds"
+        return ctx
+
+    mapper = ctx.mapper
+
+    # -------------------------------------------------
+    # Extract joints for UAH
+    # -------------------------------------------------
+    W_uah, E_uah, S_uah = mapper.arm_triplet(uah_frame.landmarks)
+    uah_angle = _angle(W_uah, E_uah, S_uah)
+
+    # -------------------------------------------------
+    # Extract joints for RELEASE
+    # -------------------------------------------------
+    W_rel, E_rel, S_rel = mapper.arm_triplet(rel_frame.landmarks)
+    release_angle = _angle(W_rel, E_rel, S_rel)
+
+    # -------------------------------------------------
+    # Compute extension (UAH → Release)
+    # -------------------------------------------------
+    extension_raw = release_angle - uah_angle
+    extension = float(extension_raw)
+
+    # -------------------------------------------------
+    # Error Margin (Biomech tolerance)
+    # -------------------------------------------------
+    margin = 6.0  # THIS is now a pure float. No "±" and no "°".
+
+    # -------------------------------------------------
+    # Plane detection
+    # -------------------------------------------------
+    plane_uah = _detect_plane(W_uah - E_uah)
+    plane_rel = _detect_plane(W_rel - E_rel)
+
+    # -------------------------------------------------
+    # Release height (normalized)
+    # Shoulder midpoint = torso reference
+    # -------------------------------------------------
+    LS, RS = mapper.shoulders_pair(rel_frame.landmarks)
+    shoulder_mid = (LS + RS) / 2.0
+
+    wrist_y = W_rel[1]
+    norm_height = float(shoulder_mid[1] - wrist_y)
+
+    # Confidence
+    elbow_conf = int((rel_frame.confidence + uah_frame.confidence) * 50)
+    height_conf = int(rel_frame.confidence * 100)
+
+    # -------------------------------------------------
+    # Assign biomech outputs
+    # -------------------------------------------------
+    ctx.biomech.elbow = BiomechElbowModel(
+        uah_angle=float(uah_angle),
+        release_angle=float(release_angle),
+        extension_deg=float(extension),
+        extension_raw_deg=float(extension_raw),
+        extension_error_margin_deg=float(margin),  # FIXED: must be float
+        extension_note=(
+            "Good estimate; clean visibility."
+            if elbow_conf > 85 else
+            "Estimate acceptable; some distortion possible."
+        ),
+    )
+
+    ctx.biomech.release_height = ReleaseHeightModel(
+        norm_height=float(norm_height),
+        wrist_y=float(wrist_y),
+    )
+
+    ctx.biomech.elbow_conf = elbow_conf
+    ctx.biomech.release_height_conf = height_conf
+
+    ctx.biomech.angle_plane = AnglePlaneModel(
+        uah_plane=plane_uah,
+        release_plane=plane_rel,
+    )
+
+    ctx.biomech.error = None
+    return ctx
+
