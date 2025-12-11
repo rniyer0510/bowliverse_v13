@@ -11,12 +11,3 @@ class EventsModel(BaseModel):
     ffc: Optional[EventFrame] = None
     bfc: Optional[EventFrame] = None
     error: Optional[str] = None
-
-    @property
-    def frames(self):
-        return {
-            "release": self.release,
-            "uah": self.uah,
-            "ffc": self.ffc,
-            "bfc": self.bfc,
-        }

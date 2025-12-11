@@ -3,37 +3,29 @@ from typing import Optional
 
 
 class BiomechElbowModel(BaseModel):
-    """
-    Elbow kinematics around the critical window (UAH → Release).
-    All angles in degrees.
-    """
-    uah_angle: float
-    release_angle: float
+    uah_angle: Optional[float] = None
+    release_angle: Optional[float] = None
 
-    extension_deg: float              # final usable extension
+    peak_extension_angle_deg: Optional[float] = None
+    peak_extension_frame: Optional[int] = None
+
+    extension_deg: Optional[float] = None
     extension_raw_deg: Optional[float] = None
     extension_error_margin_deg: Optional[float] = None
     extension_note: Optional[str] = None
 
 
-class BiomechReleaseHeightModel(BaseModel):
-    """
-    Normalized release height.
-    norm_height > 0  → above shoulder line
-    norm_height ~ 0  → shoulder level
-    norm_height < 0  → below shoulder line
-    """
-    norm_height: float
-    wrist_y: float
+class ReleaseHeightModel(BaseModel):
+    norm_height: Optional[float] = None
+    wrist_y: Optional[float] = None
 
 
 class BiomechModel(BaseModel):
     elbow: Optional[BiomechElbowModel] = None
-    release_height: Optional[BiomechReleaseHeightModel] = None
+    release_height: Optional[ReleaseHeightModel] = None
 
-    elbow_conf: Optional[int] = None
-    release_height_conf: Optional[int] = None
-
+    elbow_conf: Optional[float] = None
+    release_height_conf: Optional[float] = None
     angle_plane: Optional[dict] = None
 
     error: Optional[str] = None

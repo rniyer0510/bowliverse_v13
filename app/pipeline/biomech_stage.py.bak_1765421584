@@ -1,0 +1,125 @@
+# app/pipeline/biomech_stage.py
+"""
+Phase-1 — Stable Elbow Extension + Flexion Writer
+Matches biomech_model EXACTLY.
+"""
+
+import numpy as np
+from app.models.context import Context
+from app.utils.angles import elbow_flexion, gaussian_smooth
+from app.utils.landmarks import LandmarkMapper
+
+
+def run(ctx: Context) -> Context:
+    pose_frames = ctx.pose.frames
+    events = ctx.events
+
+    if not pose_frames or events.error:
+        ctx.biomech.error = "Missing pose/event data"
+        return ctx
+
+    # -------------------------------
+    # Extract event frames
+    # -------------------------------
+    try:
+        f_uah = int(events.uah.frame)
+        f_rel = int(events.release.frame)
+    except Exception:
+        ctx.biomech.error = "Missing key event frames"
+        return ctx
+
+    if f_rel < 0 or f_rel >= len(pose_frames):
+        ctx.biomech.error = "Invalid Release frame index"
+        return ctx
+    if f_uah < 0 or f_uah >= len(pose_frames):
+        ctx.biomech.error = "Invalid UAH frame index"
+        return ctx
+
+    mapper = LandmarkMapper(ctx.input.hand)
+
+    # -------------------------------
+    # Compute flexion curve
+    # -------------------------------
+    flex_series = []
+
+    # Sweep from UAH → Release
+    for i in range(f_uah, f_rel + 1):
+        lm = pose_frames[i].landmarks
+        S = mapper.vec(lm, "shoulder")
+        E = mapper.vec(lm, "elbow")
+        W = mapper.vec(lm, "wrist")
+        flex_series.append(elbow_flexion(S, E, W))
+
+    # Smooth the curve
+    flex_smooth = gaussian_smooth(flex_series, sigma=1.0)
+
+    # ICC extension = max - min
+    flex_min = float(min(flex_smooth))
+    flex_max = float(max(flex_smooth))
+    extension_raw = float(max(0.0, flex_max - flex_min))
+
+    # Flexion snapshots
+    uah_angle = float(flex_smooth[0])
+    rel_angle = float(flex_smooth[-1])
+
+    # Find peak extension frame (Phase-1 simple)
+    peak_raw = flex_max
+    peak_frame = f_uah + int(np.argmax(flex_smooth))
+
+    # Final extension (Phase-1 → no confidence dampening)
+    extension_final = extension_raw
+
+    # -------------------------------
+    # Release height
+    # -------------------------------
+    f_rel_frame = pose_frames[f_rel]
+    lm_rel = f_rel_frame.landmarks
+
+    LS, RS = mapper.shoulders_pair(lm_rel)
+    LH, RH = mapper.hips_pair(lm_rel)
+
+    shoulder_mid = (LS + RS) / 2.0
+    hip_mid = (LH + RH) / 2.0
+
+    torso_len = abs(shoulder_mid[1] - hip_mid[1]) + 1e-6
+    wrist_y = float(mapper.vec(lm_rel, "wrist")[1])
+    norm_height = float((shoulder_mid[1] - wrist_y) / torso_len)
+
+    # -------------------------------
+    # Confidence (Phase-1 basic)
+    # -------------------------------
+    vis_rel = float(f_rel_frame.confidence)
+    vis_uah = float(pose_frames[f_uah].confidence)
+
+    elbow_conf = float(min(100.0, max(0.0, (vis_rel + vis_uah) * 50.0)))
+    release_height_conf = int(min(100, max(0, 100 * vis_rel)))
+
+    # -------------------------------
+    # Write outputs
+    # -------------------------------
+    ctx.biomech.elbow = ctx.biomech.elbow.__class__(
+        uah_angle=uah_angle,                      # FIXED
+        release_angle=rel_angle,                  # FIXED
+        peak_extension_angle_deg=peak_raw,
+        peak_extension_frame=int(peak_frame),
+        extension_deg=extension_final,
+        extension_raw_deg=extension_raw,
+        extension_error_margin_deg=6.0,
+        extension_note="Phase-1 Stable Reading",
+    )
+
+    ctx.biomech.release_height = ctx.biomech.release_height.__class__(
+        norm_height=norm_height,
+        wrist_y=wrist_y,
+    )
+
+    ctx.biomech.elbow_conf = elbow_conf
+    ctx.biomech.release_height_conf = release_height_conf
+    ctx.biomech.angle_plane = {
+        "uah_plane": "projected",
+        "release_plane": "projected"
+    }
+
+    ctx.biomech.error = None
+    return ctx
+
