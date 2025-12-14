@@ -6,6 +6,13 @@ from app.utils.landmarks import LandmarkMapper
 from app.utils.angles import elbow_flexion
 from app.utils.logger import log
 
+# NEW primitives
+from app.pipeline.backfoot_contact import run as backfoot_contact_run
+from app.pipeline.hip_alignment import run as hip_alignment_run
+from app.pipeline.shoulder_alignment import run as shoulder_alignment_run
+from app.pipeline.shoulder_hip_separation import run as shoulder_hip_separation_run
+
+
 MAX_INTERP_GAP = 7   # D2 rule
 
 
@@ -121,6 +128,14 @@ def run(ctx: Context) -> Context:
         if not events.release or not events.uah:
             ctx.biomech.error = "Missing key event frames"
             return ctx
+
+        # -------------------------------------------------------------
+        # NEW: Alignment primitives (matrix-ready)
+        # -------------------------------------------------------------
+        backfoot_contact_run(ctx)
+        hip_alignment_run(ctx)
+        shoulder_alignment_run(ctx)
+        shoulder_hip_separation_run(ctx)
 
         f_rel = events.release.frame
         f_uah = events.uah.frame
@@ -243,4 +258,3 @@ def run(ctx: Context) -> Context:
         ctx.biomech.error = str(e)
         log(f"[ERROR] BiomechStage Exception: {e}")
         return ctx
-
