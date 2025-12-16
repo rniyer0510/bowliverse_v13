@@ -1,7 +1,11 @@
 from pydantic import BaseModel, Field
-from typing import Optional, Dict, Any
+from typing import Optional
+
 
 class RiskModel(BaseModel):
-    score: Optional[float] = None
-    level: Optional[str] = None
-    details: Dict[str, Any] = Field(default_factory=dict)
+    overall: str = "Low"
+
+    # Existing / future extensible fields
+    elbow: Optional[str] = None
+    shoulder: Optional[str] = None
+    knee: Optional[str] = None

@@ -1,23 +1,24 @@
+# app/pipeline/events_stage.py
 """
-Bowliverse v13.8 — EVENTS STAGE (C-2 Adaptive UAH Refinement)
+Bowliverse v13.8 — EVENTS STAGE (C-2 Adaptive UAH + Reverse FFC)
 --------------------------------------------------------------
 
-Goal:
-- Keep event semantics intact (Release → UAH → FFC → BFC).
-- Improve UAH detection by combining:
-    • flexion minima
-    • humerus elevation
-    • shoulder rotation velocity
-- Bounded correction (±8 frames)
-- Occlusion-safe with minimum visibility filter
+Design rules:
+- Canonical order: Release → UAH → FFC → BFC
+- Release is the most reliable anchor
+- UAH refined using flexion + elevation + rotation (C-2)
+- FFC detected in REVERSE, anchored at UAH
+- No executable logic at module scope
 """
 
 from typing import Optional
 import numpy as np
 
-from app.pipeline.context import Context
-from app.utils.landmarks import LandmarkMapper
+from app.models.context import Context
 from app.models.events_model import EventFrame
+from app.utils.landmarks import LandmarkMapper
+
+from app.pipeline.ffc_reverse import detect_ffc_reverse
 
 
 # -----------------------------------------------------
@@ -40,20 +41,20 @@ def _is_valid_frame(pf, mapper, min_vis=0.15):
         sh = lm[mapper.primary["shoulder"]]["vis"]
         el = lm[mapper.primary["elbow"]]["vis"]
         wr = lm[mapper.primary["wrist"]]["vis"]
-        return (sh >= min_vis and el >= min_vis and wr >= min_vis)
+        return sh >= min_vis and el >= min_vis and wr >= min_vis
     except Exception:
         return False
 
 
 # -----------------------------------------------------
-# Compute flexion curve
+# Flexion curve (internal)
 # -----------------------------------------------------
 def _flexion_list(pose_frames, mapper):
-    flex_list = []
+    out = []
     for pf in pose_frames:
         lm = pf.landmarks
         if lm is None:
-            flex_list.append(None)
+            out.append(0.0)
             continue
         try:
             S = mapper.vec(lm, "shoulder")
@@ -62,76 +63,58 @@ def _flexion_list(pose_frames, mapper):
             hum = S - E
             fore = W - E
             denom = (np.linalg.norm(hum) * np.linalg.norm(fore)) + 1e-9
-            cosang = np.dot(hum, fore) / denom
-            cosang = max(-1.0, min(1.0, cosang))
-            external = float(np.degrees(np.arccos(cosang)))
-            flex = 180.0 - external
+            cosang = np.clip(np.dot(hum, fore) / denom, -1.0, 1.0)
+            ext = float(np.degrees(np.arccos(cosang)))
+            out.append(180.0 - ext)
         except Exception:
-            flex = None
-        flex_list.append(flex)
-
-    cleaned = [(0.0 if a is None else a) for a in flex_list]
-    smoothed = _smooth(cleaned)
-    return smoothed
+            out.append(0.0)
+    return _smooth(out)
 
 
 # -----------------------------------------------------
-# Compute humerus elevation (shoulder → elbow vector Y)
+# Elevation (shoulder above elbow)
 # -----------------------------------------------------
 def _elevation_list(pose_frames, mapper):
+    sh = mapper.primary["shoulder"]
+    el = mapper.primary["elbow"]
     vals = []
-    idx_sh = mapper.primary["shoulder"]
-    idx_el = mapper.primary["elbow"]
-
     for pf in pose_frames:
         lm = pf.landmarks
         if lm is None:
-            vals.append(None)
+            vals.append(0.0)
             continue
-        try:
-            sh = lm[idx_sh]["y"]
-            el = lm[idx_el]["y"]
-            vals.append(float(sh - el))  # positive when shoulder above elbow
-        except Exception:
-            vals.append(None)
-
-    cleaned = [(0.0 if a is None else a) for a in vals]
-    return _smooth(cleaned)
+        vals.append(float(lm[sh]["y"] - lm[el]["y"]))
+    return _smooth(vals)
 
 
 # -----------------------------------------------------
-# Compute shoulder rotation velocity (ΔX of shoulder vs hip)
+# Shoulder rotation velocity
 # -----------------------------------------------------
 def _rotation_list(pose_frames, mapper):
+    sh = mapper.primary["shoulder"]
+    hip = mapper.primary["hip"]
     vals = []
-    sh_idx = mapper.primary["shoulder"]
-    hip_idx = mapper.primary["hip"]
-
     prev = None
     for pf in pose_frames:
         lm = pf.landmarks
         if lm is None:
             vals.append(0.0)
             continue
-        shx = lm[sh_idx]["x"]
-        hix = lm[hip_idx]["x"]
-        if prev is None:
-            vals.append(0.0)
-        else:
-            vals.append(float((shx - hix) - prev))
-        prev = (shx - hix)
+        cur = lm[sh]["x"] - lm[hip]["x"]
+        vals.append(0.0 if prev is None else cur - prev)
+        prev = cur
     return _smooth(vals)
 
 
 # -----------------------------------------------------
-# Release detection (same as before)
+# Release detection
 # -----------------------------------------------------
 def detect_release(pose_frames, mapper) -> Optional[EventFrame]:
     angles = []
     for pf in pose_frames:
         lm = pf.landmarks
         if lm is None:
-            angles.append(None)
+            angles.append(0.0)
             continue
         try:
             S = mapper.vec(lm, "shoulder")
@@ -140,99 +123,49 @@ def detect_release(pose_frames, mapper) -> Optional[EventFrame]:
             hum = S - E
             fore = W - E
             denom = (np.linalg.norm(hum) * np.linalg.norm(fore)) + 1e-9
-            cosang = np.dot(hum, fore) / denom
-            cosang = max(-1.0, min(1.0, cosang))
-            ext = float(np.degrees(np.arccos(cosang)))
+            cosang = np.clip(np.dot(hum, fore) / denom, -1.0, 1.0)
+            angles.append(float(np.degrees(np.arccos(cosang))))
         except Exception:
-            ext = None
-        angles.append(ext)
+            angles.append(0.0)
 
-    cleaned = [(0.0 if a is None else a) for a in angles]
-    smoothed = _smooth(cleaned)
-
-    idx = int(np.argmax(smoothed))
+    idx = int(np.argmax(_smooth(angles)))
     conf = float(max(0.0, min(1.0, pose_frames[idx].confidence))) * 100.0
     return EventFrame(frame=idx, conf=conf)
 
 
 # -----------------------------------------------------
-# C-2 UAH detection (flexion + elevation + rotation)
+# UAH detection (C-2)
 # -----------------------------------------------------
 def detect_uah_c2(pose_frames, mapper, rel_idx) -> Optional[EventFrame]:
-    if rel_idx <= 2:
+    if rel_idx <= 3:
         return None
 
     flex = _flexion_list(pose_frames, mapper)
     elev = _elevation_list(pose_frames, mapper)
     rot = _rotation_list(pose_frames, mapper)
 
-    # --- A) Flexion minimum baseline ---
     flex_idx = int(np.argmin(flex[:rel_idx]))
 
-    # --- B) Elevation rise window ---
-    elev_segment = elev[:rel_idx]
-    elev_vel = np.gradient(elev_segment)
-    accel_candidates = [i for i, v in enumerate(elev_vel) if v > 0.01]
-
-    if accel_candidates:
-        elev_idx = int(np.median(accel_candidates))
-    else:
-        elev_idx = flex_idx
-
-    # --- C) Shoulder rotation (torso uncoiling begins) ---
+    elev_vel = np.gradient(elev[:rel_idx])
     rot_vel = np.gradient(rot[:rel_idx])
-    rot_candidates = [i for i, v in enumerate(rot_vel) if v > 0.01]
 
-    if rot_candidates:
-        rot_idx = int(np.median(rot_candidates))
-    else:
-        rot_idx = flex_idx
+    elev_idx = (
+        int(np.median([i for i, v in enumerate(elev_vel) if v > 0.01]))
+        if any(v > 0.01 for v in elev_vel)
+        else flex_idx
+    )
 
-    # --- Combine (C-2 logic) ---
-    raw_idx = int(np.median([flex_idx, elev_idx, rot_idx]))
+    rot_idx = (
+        int(np.median([i for i, v in enumerate(rot_vel) if v > 0.01]))
+        if any(v > 0.01 for v in rot_vel)
+        else flex_idx
+    )
 
-    # Bounded correction window (±8 frames from flex minimum)
-    uah_idx = int(np.clip(raw_idx, flex_idx - 8, flex_idx + 8))
+    raw = int(np.median([flex_idx, elev_idx, rot_idx]))
+    uah_idx = int(np.clip(raw, flex_idx - 8, flex_idx + 8))
 
     conf = float(max(0.0, min(1.0, pose_frames[uah_idx].confidence))) * 100.0
     return EventFrame(frame=uah_idx, conf=conf)
-
-
-# -----------------------------------------------------
-# FFC (same as before)
-# -----------------------------------------------------
-def detect_ffc(pose_frames, mapper, rel_idx) -> Optional[EventFrame]:
-    Ys = []
-    ankle = mapper.primary["ankle"]
-
-    for i in range(rel_idx):
-        lm = pose_frames[i].landmarks
-        Ys.append(1.0 if lm is None else float(lm[ankle]["y"]))
-
-    cleaned = _smooth(Ys)
-    idx = int(np.argmin(cleaned))
-    conf = float(max(0.0, min(1.0, pose_frames[idx].confidence))) * 100.0
-    return EventFrame(frame=idx, conf=conf)
-
-
-# -----------------------------------------------------
-# BFC (same as before)
-# -----------------------------------------------------
-def detect_bfc(pose_frames, mapper, ffc_idx) -> Optional[EventFrame]:
-    if ffc_idx <= 1:
-        return None
-
-    Ys = []
-    ankle = mapper.primary["ankle"]
-
-    for i in range(ffc_idx):
-        lm = pose_frames[i].landmarks
-        Ys.append(1.0 if lm is None else float(lm[ankle]["y"]))
-
-    cleaned = _smooth(Ys)
-    idx = int(np.argmin(cleaned))
-    conf = float(max(0.0, min(1.0, pose_frames[idx].confidence))) * 100.0
-    return EventFrame(frame=idx, conf=conf)
 
 
 # -----------------------------------------------------
@@ -247,35 +180,39 @@ def run(ctx: Context) -> Context:
 
         mapper = LandmarkMapper(ctx.input.hand)
 
-        # Apply visibility filter
-        filtered = [pf for pf in pose_frames if _is_valid_frame(pf, mapper)]
-        if len(filtered) >= 5:
-            pose_frames = filtered
+        # Visibility filter
+        valid = [pf for pf in pose_frames if _is_valid_frame(pf, mapper)]
+        if len(valid) >= 5:
+            pose_frames = valid
 
-        # 1. Release
+        # Release
         release = detect_release(pose_frames, mapper)
         if release is None:
             ctx.events.error = "Release not found"
             return ctx
 
-        # 2. UAH (C-2 Adaptive)
+        # UAH
         uah = detect_uah_c2(pose_frames, mapper, release.frame)
         if uah is None:
-            uah = EventFrame(frame=max(0, release.frame - 5), conf=10.0)
+            uah = EventFrame(frame=max(0, release.frame - 6), conf=10.0)
 
-        # Ordering correction
-        if uah.frame > release.frame:
+        if uah.frame >= release.frame:
             uah.frame = max(0, release.frame - 3)
 
-        # 3. FFC
-        ffc = detect_ffc(pose_frames, mapper, release.frame)
-        if ffc is None:
-            ffc = EventFrame(frame=max(0, uah.frame - 5), conf=10.0)
+        # -------------------------------------------------
+        # FFC — reverse, STABILITY-BASED (anchored at UAH)
+        # -------------------------------------------------
+        ffc = detect_ffc_reverse(
+            pose_frames=pose_frames,
+            anchor_idx=uah.frame,
+            hand=ctx.input.hand,
+        )
 
-        # 4. BFC
-        bfc = detect_bfc(pose_frames, mapper, ffc.frame)
-        if bfc is None:
-            bfc = EventFrame(frame=max(0, ffc.frame - 5), conf=10.0)
+        if ffc is None:
+            ffc = EventFrame(frame=max(0, uah.frame - 6), conf=10.0)
+
+        # BFC (optional / legacy placeholder)
+        bfc = None
 
         ctx.events.release = release
         ctx.events.uah = uah

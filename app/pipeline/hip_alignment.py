@@ -1,131 +1,92 @@
 # app/pipeline/hip_alignment.py
-"""
-ActionLab / Bowliverse v13.9 — HIP ALIGNMENT (FFC-ANCHORED, CAMERA-ROBUST)
-
-What this computes:
-- Pelvis (hip-line) orientation at Front Foot Contact (FFC)
-- Uses ground-plane projection (X–Z), ignores Y to avoid camera tilt issues
-- Outputs angle + zone for action matrix and downstream logic
-
-Design rules:
-- Anchor strictly at FFC
-- No pitch-direction assumptions
-- Camera-robust under side-on / near side-on capture
-- Graceful degradation if landmarks are missing
-"""
 
 import numpy as np
 from app.models.context import Context
+from app.utils.angles import angle
 
 
-# ---------------------------------------------------------
-# Utility: angle in degrees between 2D vectors
-# ---------------------------------------------------------
-def _angle_2d(v1, v2):
-    """
-    Returns angle in degrees between two 2D vectors.
-    """
-    n1 = np.linalg.norm(v1)
-    n2 = np.linalg.norm(v2)
-    if n1 < 1e-6 or n2 < 1e-6:
-        return None
-
-    cosang = np.dot(v1, v2) / (n1 * n2)
-    cosang = np.clip(cosang, -1.0, 1.0)
-    return float(np.degrees(np.arccos(cosang)))
+WINDOW = 2  # frames around UAH
 
 
-# ---------------------------------------------------------
-# MAIN
-# ---------------------------------------------------------
 def run(ctx: Context) -> None:
     """
-    Computes hip orientation at FFC and stores result in ctx.biomech.hip
+    Hip orientation near UAH (action classification phase).
 
-    Output structure:
-    {
-        "angle_deg": float,
-        "zone": "SIDE_ON" | "TRANSITIONAL" | "FRONT_ON",
-        "confidence": float,
-        "frame": int
-    }
+    Camera-agnostic:
+    - Hip line: LEFT_HIP → RIGHT_HIP
+    - Forward reference: hip-midpoint → shoulder-midpoint
+
+    Output: ctx.biomech.hip = {angle_deg, zone, confidence, frame}
     """
 
-    # -------------------------------------------------
-    # Preconditions
-    # -------------------------------------------------
-    if not ctx.events or not ctx.events.ffc:
+    events = ctx.events
+    if not events or not events.uah:
         return
 
-    frame = ctx.events.ffc.frame
-    conf = ctx.events.ffc.conf
+    center = events.uah.frame
+    conf = events.uah.conf
 
     pose_frames = ctx.pose.frames
-    if frame < 0 or frame >= len(pose_frames):
+    if center < 0 or center >= len(pose_frames):
         return
 
-    pf = pose_frames[frame]
-    if pf.landmarks is None:
+    # Use small window around UAH for stability
+    frames = [
+        f for f in range(center - WINDOW, center + WINDOW + 1)
+        if 0 <= f < len(pose_frames)
+    ]
+
+    angles = []
+
+    for f in frames:
+        pf = pose_frames[f]
+        if pf.landmarks is None:
+            continue
+
+        lm = pf.landmarks
+
+        LEFT_HIP = 23
+        RIGHT_HIP = 24
+        LEFT_SHOULDER = 11
+        RIGHT_SHOULDER = 12
+
+        try:
+            Lh = np.array([lm[LEFT_HIP]["x"], lm[LEFT_HIP]["y"], lm[LEFT_HIP]["z"]])
+            Rh = np.array([lm[RIGHT_HIP]["x"], lm[RIGHT_HIP]["y"], lm[RIGHT_HIP]["z"]])
+            Ls = np.array([lm[LEFT_SHOULDER]["x"], lm[LEFT_SHOULDER]["y"], lm[LEFT_SHOULDER]["z"]])
+            Rs = np.array([lm[RIGHT_SHOULDER]["x"], lm[RIGHT_SHOULDER]["y"], lm[RIGHT_SHOULDER]["z"]])
+        except Exception:
+            continue
+
+        hip_mid = (Lh + Rh) / 2.0
+        shoulder_mid = (Ls + Rs) / 2.0
+
+        hip_vec = Rh - Lh
+        body_vec = shoulder_mid - hip_mid
+
+        if np.linalg.norm(hip_vec) < 1e-6 or np.linalg.norm(body_vec) < 1e-6:
+            continue
+
+        ang = float(angle(Rh, hip_mid, hip_mid + body_vec))
+        angles.append(ang)
+
+    if not angles:
         return
 
-    lm = pf.landmarks
+    ang = float(np.median(angles))
 
-    # MediaPipe landmark indices
-    LEFT_HIP = 23
-    RIGHT_HIP = 24
-
-    try:
-        L = lm[LEFT_HIP]
-        R = lm[RIGHT_HIP]
-
-        L_pt = np.array([L["x"], L["y"], L["z"]], float)
-        R_pt = np.array([R["x"], R["y"], R["z"]], float)
-    except Exception:
-        return
-
-    # -------------------------------------------------
-    # Hip vector (projected to ground plane: X–Z)
-    # -------------------------------------------------
-    hip_vec = R_pt - L_pt
-    hip_vec_xz = np.array([hip_vec[0], hip_vec[2]], float)
-
-    # Reference axis: camera horizontal (X–Z forward)
-    # We do NOT assume pitch direction; this is a neutral axis
-    ref_axis = np.array([1.0, 0.0], float)
-
-    ang = _angle_2d(hip_vec_xz, ref_axis)
-    if ang is None:
-        return
-
-    # -------------------------------------------------
-    # Handedness normalization
-    # -------------------------------------------------
-    # Left-handed bowlers mirror the pelvis orientation
-    if ctx.input.hand == "L":
-        ang = 180.0 - ang
-
-    # Normalize to [0, 90]
-    ang = abs(ang)
-    if ang > 90.0:
-        ang = 180.0 - ang
-
-    # -------------------------------------------------
-    # Zone classification (tunable, but stable)
-    # -------------------------------------------------
-    if ang <= 30.0:
+    # Broad zones (intentionally overlapping)
+    if ang <= 35:
         zone = "SIDE_ON"
-    elif ang <= 55.0:
-        zone = "TRANSITIONAL"
+    elif ang <= 60:
+        zone = "MIXED"
     else:
         zone = "FRONT_ON"
 
-    # -------------------------------------------------
-    # Store result
-    # -------------------------------------------------
     ctx.biomech.hip = {
-        "angle_deg": round(float(ang), 2),
+        "angle_deg": round(ang, 2),
         "zone": zone,
         "confidence": round(float(conf), 2),
-        "frame": int(frame),
+        "frame": int(center),
     }
 

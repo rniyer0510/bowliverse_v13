@@ -12,13 +12,17 @@ RIGHT_SHOULDER = 12
 
 def run(ctx: Context) -> Context:
     """
-    Shoulder alignment using image-space landmarks at FFC.
-    Camera-relative (side-on capture assumed).
+    Shoulder alignment using image-space landmarks.
+
+    Interpretation (side-on camera assumed):
+    - Shoulder line parallel to pitch  → SIDE_ON
+    - Shoulder line perpendicular      → FRONT_ON
+    - Transitional / misaligned        → MIXED
 
     Output:
         ctx.biomech.shoulder = {
             "angle_deg": float,
-            "zone": "SIDE_ON" | "SEMI_OPEN" | "FRONT_ON",
+            "zone": "SIDE_ON" | "MIXED" | "FRONT_ON",
             "frame": int
         }
     """
@@ -29,18 +33,19 @@ def run(ctx: Context) -> Context:
     # Default: feature absent
     ctx.biomech.shoulder = None
 
-    if not events.ffc:
-        log("[DEBUG] ShoulderAlign: FFC not available, skipping")
+    # Prefer UAH for action classification
+    if not events.uah:
+        log("[DEBUG] ShoulderAlign: UAH not available, skipping")
         return ctx
 
-    f_ffc = events.ffc.frame
-    if not (0 <= f_ffc < len(pose_frames)):
-        log("[DEBUG] ShoulderAlign: Invalid FFC frame index")
+    frame = events.uah.frame
+    if not (0 <= frame < len(pose_frames)):
+        log("[DEBUG] ShoulderAlign: Invalid UAH frame index")
         return ctx
 
-    pf = pose_frames[f_ffc]
+    pf = pose_frames[frame]
     if pf.landmarks is None:
-        log("[DEBUG] ShoulderAlign: Missing landmarks at FFC")
+        log("[DEBUG] ShoulderAlign: Missing landmarks at UAH")
         return ctx
 
     try:
@@ -52,25 +57,33 @@ def run(ctx: Context) -> Context:
         dx = RS[0] - LS[0]
         dy = RS[1] - LS[1]
 
+        # Angle of shoulder line in image plane
         angle_deg = abs(np.degrees(np.arctan2(dy, dx)))
+
+        # Normalize to [0–90]
         if angle_deg > 90:
             angle_deg = 180 - angle_deg
 
-        if angle_deg < 20:
+        # -------------------------------------------------
+        # Biomechanically correct zones (range-based)
+        # -------------------------------------------------
+        # ~0°  → parallel to pitch → SIDE_ON
+        # ~90° → perpendicular     → FRONT_ON
+        if angle_deg <= 25:
             zone = "SIDE_ON"
-        elif angle_deg <= 45:
-            zone = "SEMI_OPEN"
-        else:
+        elif angle_deg >= 65:
             zone = "FRONT_ON"
+        else:
+            zone = "MIXED"
 
         ctx.biomech.shoulder = {
             "angle_deg": round(float(angle_deg), 2),
             "zone": zone,
-            "frame": f_ffc,
+            "frame": int(frame),
         }
 
         log(
-            f"[DEBUG] ShoulderAlign @FFC={f_ffc}: "
+            f"[DEBUG] ShoulderAlign @UAH={frame}: "
             f"angle={angle_deg:.2f}, zone={zone}"
         )
 
