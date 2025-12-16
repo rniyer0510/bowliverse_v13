@@ -1,124 +1,154 @@
 # app/pipeline/shoulder_hip_separation.py
+"""
+ActionLab / Bowliverse v13.9 — SHOULDER–HIP SEPARATION (FFC-ANCHORED)
+
+What this computes:
+- Relative rotation between shoulders and hips at Front Foot Contact (FFC)
+- Uses ground-plane projection (X–Z) for camera robustness
+- Positive separation indicates shoulders rotated more than hips (good for pace)
+
+Design rules:
+- Strictly anchored at FFC
+- No pitch-direction assumptions
+- Camera-robust under side-on / near side-on capture
+- Graceful degradation if landmarks are missing
+"""
 
 import numpy as np
 from app.models.context import Context
-from app.utils.logger import log
 
 
-# MediaPipe landmark indices (image-space)
-LEFT_SHOULDER = 11
-RIGHT_SHOULDER = 12
-LEFT_HIP = 23
-RIGHT_HIP = 24
+# ---------------------------------------------------------
+# Utility: angle in degrees between 2D vectors
+# ---------------------------------------------------------
+def _angle_2d(v1, v2):
+    n1 = np.linalg.norm(v1)
+    n2 = np.linalg.norm(v2)
+    if n1 < 1e-6 or n2 < 1e-6:
+        return None
+
+    cosang = np.dot(v1, v2) / (n1 * n2)
+    cosang = np.clip(cosang, -1.0, 1.0)
+    return float(np.degrees(np.arccos(cosang)))
 
 
-def _line_angle(p1, p2):
+# ---------------------------------------------------------
+# MAIN
+# ---------------------------------------------------------
+def run(ctx: Context) -> None:
     """
-    Return orientation angle of a line (p1 -> p2) in degrees.
-    Normalized to [0, 180).
-    """
-    dx = p2[0] - p1[0]
-    dy = p2[1] - p1[1]
+    Computes shoulder–hip separation at FFC and stores result in ctx.biomech.shoulder_hip
 
-    ang = abs(np.degrees(np.arctan2(dy, dx)))
-    if ang >= 180:
-        ang -= 180
-    return ang
-
-
-def run(ctx: Context) -> Context:
-    """
-    Shoulder–Hip separation (torsion) at FFC.
-    Camera-relative but largely yaw-invariant.
-
-    Output:
-        ctx.biomech.shoulder_hip = {
-            "angle_deg": float,
-            "zone": "STACKED" | "MILD" | "MODERATE" | "HIGH",
-            "confidence": float,
-            "frame": int
-        }
+    Output structure:
+    {
+        "separation_deg": float,
+        "zone": "LOW" | "MODERATE" | "HIGH",
+        "confidence": float,
+        "frame": int
+    }
     """
 
-    events = ctx.events
+    # -------------------------------------------------
+    # Preconditions
+    # -------------------------------------------------
+    if not ctx.events or not ctx.events.ffc:
+        return
+
+    frame = ctx.events.ffc.frame
+    conf = ctx.events.ffc.conf
+
     pose_frames = ctx.pose.frames
+    if frame < 0 or frame >= len(pose_frames):
+        return
 
-    ctx.biomech.shoulder_hip = None
+    pf = pose_frames[frame]
+    if pf.landmarks is None:
+        return
 
-    if not events.ffc:
-        log("[DEBUG] ShoulderHipSep: FFC not available, skipping")
-        return ctx
+    lm = pf.landmarks
 
-    f_ffc = events.ffc.frame
-    if not (0 <= f_ffc < len(pose_frames)):
-        log("[DEBUG] ShoulderHipSep: Invalid FFC frame index")
-        return ctx
+    # MediaPipe landmark indices
+    LEFT_SHOULDER = 11
+    RIGHT_SHOULDER = 12
+    LEFT_HIP = 23
+    RIGHT_HIP = 24
 
-    # Small temporal window for stability
-    window = range(max(0, f_ffc - 2), min(len(pose_frames), f_ffc + 3))
+    try:
+        LS = lm[LEFT_SHOULDER]
+        RS = lm[RIGHT_SHOULDER]
+        LH = lm[LEFT_HIP]
+        RH = lm[RIGHT_HIP]
 
-    sep_angles = []
-    confs = []
+        LS_pt = np.array([LS["x"], LS["y"], LS["z"]], float)
+        RS_pt = np.array([RS["x"], RS["y"], RS["z"]], float)
+        LH_pt = np.array([LH["x"], LH["y"], LH["z"]], float)
+        RH_pt = np.array([RH["x"], RH["y"], RH["z"]], float)
+    except Exception:
+        return
 
-    for i in window:
-        pf = pose_frames[i]
-        if pf.landmarks is None:
-            continue
+    # -------------------------------------------------
+    # Ground-plane vectors (X–Z)
+    # -------------------------------------------------
+    shoulder_vec = RS_pt - LS_pt
+    hip_vec = RH_pt - LH_pt
 
-        lm = pf.landmarks
-        try:
-            LS = np.array([lm[LEFT_SHOULDER]["x"], lm[LEFT_SHOULDER]["y"]])
-            RS = np.array([lm[RIGHT_SHOULDER]["x"], lm[RIGHT_SHOULDER]["y"]])
-            LH = np.array([lm[LEFT_HIP]["x"], lm[LEFT_HIP]["y"]])
-            RH = np.array([lm[RIGHT_HIP]["x"], lm[RIGHT_HIP]["y"]])
+    shoulder_xz = np.array([shoulder_vec[0], shoulder_vec[2]], float)
+    hip_xz = np.array([hip_vec[0], hip_vec[2]], float)
 
-            ang_sh = _line_angle(LS, RS)
-            ang_hip = _line_angle(LH, RH)
+    # -------------------------------------------------
+    # Compute angles relative to neutral axis
+    # -------------------------------------------------
+    ref_axis = np.array([1.0, 0.0], float)
 
-            d = abs(ang_sh - ang_hip)
-            sep = min(d, 180 - d)  # [0..90]
+    sh_ang = _angle_2d(shoulder_xz, ref_axis)
+    hip_ang = _angle_2d(hip_xz, ref_axis)
 
-            sep_angles.append(sep)
+    if sh_ang is None or hip_ang is None:
+        return
 
-            # confidence from visibility (if present)
-            vis = [
-                lm[LEFT_SHOULDER].get("vis", 1.0),
-                lm[RIGHT_SHOULDER].get("vis", 1.0),
-                lm[LEFT_HIP].get("vis", 1.0),
-                lm[RIGHT_HIP].get("vis", 1.0),
-            ]
-            confs.append(min(vis))
+    # -------------------------------------------------
+    # Handedness normalization
+    # -------------------------------------------------
+    if ctx.input.hand == "L":
+        sh_ang = 180.0 - sh_ang
+        hip_ang = 180.0 - hip_ang
 
-        except Exception:
-            continue
+    # Normalize both to [0, 90]
+    sh_ang = abs(sh_ang)
+    hip_ang = abs(hip_ang)
 
-    if not sep_angles:
-        log("[DEBUG] ShoulderHipSep: No valid frames in window")
-        return ctx
+    if sh_ang > 90.0:
+        sh_ang = 180.0 - sh_ang
+    if hip_ang > 90.0:
+        hip_ang = 180.0 - hip_ang
 
-    sep_deg = float(np.median(sep_angles))
-    conf = float(np.median(confs)) if confs else 1.0
+    # -------------------------------------------------
+    # Separation (shoulders lead hips)
+    # -------------------------------------------------
+    separation = sh_ang - hip_ang
 
-    if sep_deg < 15:
-        zone = "STACKED"
-    elif sep_deg <= 30:
-        zone = "MILD"
-    elif sep_deg <= 50:
+    # Clamp for safety
+    separation = max(-90.0, min(90.0, separation))
+
+    # -------------------------------------------------
+    # Zone classification (tunable)
+    # -------------------------------------------------
+    abs_sep = abs(separation)
+
+    if abs_sep < 10.0:
+        zone = "LOW"
+    elif abs_sep < 25.0:
         zone = "MODERATE"
     else:
         zone = "HIGH"
 
+    # -------------------------------------------------
+    # Store result
+    # -------------------------------------------------
     ctx.biomech.shoulder_hip = {
-        "angle_deg": round(sep_deg, 2),
+        "separation_deg": round(float(separation), 2),
         "zone": zone,
-        "confidence": round(conf, 2),
-        "frame": f_ffc,
+        "confidence": round(float(conf), 2),
+        "frame": int(frame),
     }
-
-    log(
-        f"[DEBUG] ShoulderHipSep @FFC={f_ffc}: "
-        f"sep={sep_deg:.2f} deg, zone={zone}, conf={conf:.2f}"
-    )
-
-    return ctx
 
