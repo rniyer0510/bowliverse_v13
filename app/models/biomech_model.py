@@ -70,9 +70,13 @@ class BiomechModel(BaseModel):
     shoulder: Optional[Dict[str, Any]] = None
     shoulder_hip: Optional[Dict[str, Any]] = None
 
+    # ✅ NEW: biomechanical risk (computed in biomech_stage)
+    risk: Optional[Dict[str, Any]] = None
+
     # Confidence + misc blocks
     elbow_conf: Optional[float] = None
     release_height_conf: Optional[float] = None
     angle_plane: Optional[Dict[str, Any]] = None
 
     error: Optional[str] = None
+

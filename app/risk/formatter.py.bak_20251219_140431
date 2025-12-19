@@ -1,0 +1,118 @@
+# app/risk/formatter.py
+
+from typing import Dict, Any
+
+
+def format_risk(result: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Convert raw risk dict from risk calculators into the standardized
+    reporting format used by the frontend and report generator.
+    """
+    rid = result["risk_id"]
+    level = result["level"]
+
+    # --------------------------------------------------
+    # Hip–Shoulder Mismatch
+    # --------------------------------------------------
+    if rid == "HIP_SHOULDER_MISMATCH":
+        if level == "LOW":
+            return {
+                "id": rid,
+                "level": "LOW",
+                "status": "OK",
+                "summary": "Hips and shoulders move in sync.",
+                "detail": {
+                    "metric": "Segment coordination",
+                    "value": "Stable",
+                    "why_it_matters": (
+                        "Abrupt hip–shoulder mismatch can stress the groin and lower back."
+                    ),
+                },
+            }
+
+        return {
+            "id": rid,
+            "level": level,
+            "status": "ATTENTION",
+            "summary": "Abrupt hip–shoulder rotation detected.",
+            "detail": {
+                "metric": "Segment coordination",
+                "value": "Abrupt change",
+                "why_it_matters": (
+                    "Sudden torsional loading during front-foot contact "
+                    "can stress the groin and back."
+                ),
+            },
+        }
+
+    # --------------------------------------------------
+    # Lateral Trunk Lean
+    # --------------------------------------------------
+    if rid == "LATERAL_TRUNK_LEAN":
+        if level == "LOW":
+            return {
+                "id": rid,
+                "level": "LOW",
+                "status": "OK",
+                "summary": "Trunk remains stable through delivery.",
+                "detail": {
+                    "metric": "Lateral trunk control",
+                    "value": "Stable",
+                    "why_it_matters": (
+                        "A stable trunk allows force to transfer efficiently through the front leg."
+                    ),
+                },
+            }
+
+        return {
+            "id": rid,
+            "level": level,
+            "status": "ATTENTION",
+            "summary": "Abrupt sideways trunk movement detected after front-foot contact.",
+            "detail": {
+                "metric": "Lateral trunk control",
+                "value": "Jerky side movement",
+                "why_it_matters": (
+                    "A sudden sideways trunk snap increases load on the lower back "
+                    "and reduces control."
+                ),
+            },
+        }
+
+    # --------------------------------------------------
+    # Front-Foot Braking Shock
+    # --------------------------------------------------
+    if rid == "FRONT_FOOT_BRAKING":
+        if level == "LOW":
+            return {
+                "id": rid,
+                "level": "LOW",
+                "status": "OK",
+                "summary": "Front-foot landing absorbs force smoothly.",
+                "detail": {
+                    "metric": "Braking control",
+                    "value": "Smooth deceleration",
+                    "why_it_matters": (
+                        "Smooth braking reduces load on the knee, hip, and lower back."
+                    ),
+                },
+            }
+
+        return {
+            "id": rid,
+            "level": level,
+            "status": "ATTENTION",
+            "summary": "Abrupt front-foot braking detected.",
+            "detail": {
+                "metric": "Braking control",
+                "value": "Sudden stop",
+                "why_it_matters": (
+                    "A sudden stop at front-foot contact increases joint and spinal load."
+                ),
+            },
+        }
+
+    # --------------------------------------------------
+    # Fallback: Unknown risk ID
+    # --------------------------------------------------
+    raise ValueError(f"Unknown risk_id: {rid!r}")

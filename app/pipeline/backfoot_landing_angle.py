@@ -1,7 +1,6 @@
-# app/pipeline/backfoot_landing_angle.py
-
 import numpy as np
 from app.models.context import Context
+from app.models.events_model import EventFrame
 from app.utils.logger import log
 
 
@@ -13,7 +12,7 @@ def _angle_2d(v):
 
 def run(ctx: Context) -> None:
     """
-    Compute Back Foot Contact (BFC) landing angle.
+    Back Foot Contact (BFC) landing angle.
     Reverse search anchored at FFC.
     """
 
@@ -28,27 +27,15 @@ def run(ctx: Context) -> None:
 
     # MediaPipe indices
     if ctx.input.hand == "R":
-        ANKLE = 28      # right ankle
-        HEEL = 30
-        TOE = 32
+        ANKLE, HEEL, TOE = 28, 30, 32
     else:
-        ANKLE = 27      # left ankle
-        HEEL = 29
-        TOE = 31
+        ANKLE, HEEL, TOE = 27, 29, 31
 
     ankle_y = []
-
     for i in range(ffc_idx):
         lm = pose_frames[i].landmarks
-        if lm is None:
-            ankle_y.append(None)
-        else:
-            ankle_y.append(float(lm[ANKLE]["y"]))
+        ankle_y.append(float(lm[ANKLE]["y"]) if lm else 1.0)
 
-    # Normalize missing values
-    ankle_y = [1.0 if v is None else v for v in ankle_y]
-
-    # Reverse search for contact transition
     ground_thresh = np.percentile(ankle_y, 10)
 
     bfc_frame = None
@@ -62,17 +49,15 @@ def run(ctx: Context) -> None:
         return
 
     pf = pose_frames[bfc_frame]
-    lm = pf.landmarks
-    if lm is None:
+    if pf.landmarks is None:
         return
 
+    lm = pf.landmarks
     heel = np.array([lm[HEEL]["x"], lm[HEEL]["y"], lm[HEEL]["z"]])
     toe = np.array([lm[TOE]["x"], lm[TOE]["y"], lm[TOE]["z"]])
 
-    foot_vec = toe - heel
-    angle = abs(_angle_2d(foot_vec))
+    angle = abs(_angle_2d(toe - heel))
 
-    # Interpretation ranges
     if angle < 25:
         zone = "CLOSED"
     elif angle < 45:
@@ -82,15 +67,19 @@ def run(ctx: Context) -> None:
     else:
         zone = "VERY_OPEN"
 
+    # Correct reverse-anchored event write
+    ctx.events.bfc = EventFrame(
+        frame=bfc_frame,
+        conf=float(ctx.events.ffc.conf),
+    )
+
     ctx.biomech.backfoot = {
         "landing_angle_deg": round(angle, 2),
         "zone": zone,
         "confidence": round(float(ctx.events.ffc.conf), 2),
-        "frame": int(bfc_frame),
+        "frame": bfc_frame,
+        "type": "touch",
     }
 
-    log(
-        f"[DEBUG] BFC Landing @frame={bfc_frame}: "
-        f"angle={angle:.2f}, zone={zone}"
-    )
+    log(f"[DEBUG] BFC @frame={bfc_frame}, angle={angle:.2f}, zone={zone}")
 

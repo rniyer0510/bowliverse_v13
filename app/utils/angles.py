@@ -28,10 +28,7 @@ def elbow_flexion(shoulder, elbow, wrist):
     Returns anatomical elbow flexion in degrees.
     0°   = straight arm
     160° = fully bent arm
-
-    flexion = 180 - external_angle(humerus, forearm)
     """
-
     humerus = shoulder - elbow
     forearm = wrist - elbow
 
@@ -81,4 +78,49 @@ def gaussian_smooth(values, sigma=1.0):
         smoothed[i] = acc / (wsum + 1e-9)
 
     return smoothed.tolist()
+
+
+# -----------------------------------------------------------
+# NEW: SEMANTIC PAIR ANGLE SERIES (LONG-TERM FIX)
+# -----------------------------------------------------------
+
+def compute_pair_angle_series(
+    pose_frames,
+    mapper,
+    start_f,
+    end_f,
+    pair_fn,
+):
+    """
+    Compute planar angle series for a bilateral joint pair
+    (e.g. hips or shoulders) using LandmarkMapper semantics.
+
+    pair_fn must be:
+      - mapper.hips_pair
+      - mapper.shoulders_pair
+
+    This eliminates all 'left_*' / 'right_*' string misuse.
+    """
+
+    angles = []
+
+    for f in range(start_f, end_f + 1):
+        pf = pose_frames[f]
+
+        if pf.landmarks is None:
+            angles.append(angles[-1] if angles else 0.0)
+            continue
+
+        try:
+            A, B = pair_fn(pf.landmarks)
+        except Exception:
+            angles.append(angles[-1] if angles else 0.0)
+            continue
+
+        dx = B[0] - A[0]
+        dy = B[1] - A[1]
+
+        angles.append(float(np.degrees(np.arctan2(dy, dx))))
+
+    return np.array(angles, dtype=np.float32)
 
