@@ -1,0 +1,26 @@
+version: 1.0
+
+cues:
+  LOW_STRONG_LOW:
+    - text: "Complete your follow through."
+      why: "It helps your body keep moving instead of stopping suddenly."
+
+  MEDIUM_STRONG_LOW:
+    - text: "Let the body turn smoothly."
+      why: "Smooth turning reduces extra strain on the back and shoulders."
+
+  GOOD_STRONG_LOW:
+    - text: "Let the front leg support the action, not stop it."
+      why: "Support helps control force without jarring the body."
+
+  LOW_BALANCED_LOW:
+    - text: "Stay relaxed through the movement."
+      why: "Tension makes the body work harder than needed."
+
+  MEDIUM_BALANCED_LOW:
+    - text: "Allow your shoulders to move freely."
+      why: "Free movement keeps load from building up."
+
+  GOOD_BALANCED_LOW:
+    - text: "Keep the front foot firm but comfortable."
+      why: "Comfort allows better balance and control."

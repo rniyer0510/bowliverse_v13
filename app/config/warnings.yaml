@@ -1,0 +1,54 @@
+version: 1.0
+
+warnings:
+  - id: GROIN_LOAD_OPEN_FRONT_ON
+    when:
+      posture: LOW
+      power: STRONG
+      protection: LOW
+      backfoot: VERY_OPEN
+      hip: FRONT_ON
+    area: groin
+    severity: medium
+    explanation: >
+      This pattern can make the inner thigh work harder over time.
+
+  - id: LOWER_BACK_ROTATION_LOAD
+    when:
+      posture: LOW
+      power: STRONG
+      shoulder_hip: LOW
+    area: lower_back
+    severity: high
+    explanation: >
+      Limited body rotation can shift stress to the lower back.
+
+  - id: SHOULDER_OVERUSE
+    when:
+      posture: MEDIUM
+      power: STRONG
+      shoulder: MIXED
+    area: shoulder
+    severity: medium
+    explanation: >
+      The shoulder may be working extra to guide the action.
+
+  - id: ROTATOR_CUFF_LOAD
+    when:
+      posture: MEDIUM
+      power: STRONG
+      shoulder_hip: LOW
+    area: rotator_cuff
+    severity: medium
+    explanation: >
+      Limited rotation can increase load on shoulder muscles.
+
+  - id: KNEE_BRACING_LOAD
+    when:
+      posture: GOOD
+      power: STRONG
+      front_foot_braking: HIGH
+    area: knee
+    severity: medium
+    explanation: >
+      A very firm front leg can place stress on the knee over time.

@@ -1,0 +1,107 @@
+LOW_STRONG_LOW:
+  - text: "Complete your follow through."
+    why: "It helps your body keep moving instead of stopping suddenly."
+
+LOW_STRONG_MEDIUM:
+  - text: "Let the body flow forward after release."
+    why: "This reduces sudden strain when power is high."
+
+LOW_STRONG_GOOD:
+  - text: "Keep the action smooth and continuous."
+    why: "Good support allows strong effort without extra stress."
+
+LOW_BALANCED_LOW:
+  - text: "Stay tall and balanced through the action."
+    why: "It helps protect the body when support is limited."
+
+LOW_BALANCED_MEDIUM:
+  - text: "Let the front side support your movement."
+    why: "This improves control and comfort."
+
+LOW_BALANCED_GOOD:
+  - text: "Maintain rhythm and balance."
+    why: "A steady action keeps things efficient."
+
+LOW_SOFT_LOW:
+  - text: "Focus on balance and control."
+    why: "This helps avoid unnecessary strain."
+
+LOW_SOFT_MEDIUM:
+  - text: "Keep movements relaxed and aligned."
+    why: "It supports smooth motion."
+
+LOW_SOFT_GOOD:
+  - text: "Stay relaxed and upright."
+    why: "This allows easy, repeatable movement."
+
+MEDIUM_STRONG_LOW:
+  - text: "Let the front leg support the motion."
+    why: "It helps handle strong effort more safely."
+
+MEDIUM_STRONG_MEDIUM:
+  - text: "Allow the body to rotate freely."
+    why: "This avoids sudden stops."
+
+MEDIUM_STRONG_GOOD:
+  - text: "Keep momentum flowing."
+    why: "It helps transfer power smoothly."
+
+MEDIUM_BALANCED_LOW:
+  - text: "Focus on steady balance."
+    why: "This improves comfort and control."
+
+MEDIUM_BALANCED_MEDIUM:
+  - text: "Keep movements smooth."
+    why: "Consistency reduces stress."
+
+MEDIUM_BALANCED_GOOD:
+  - text: "Maintain natural rhythm."
+    why: "It supports repeatability."
+
+MEDIUM_SOFT_LOW:
+  - text: "Stay upright and controlled."
+    why: "This protects alignment."
+
+MEDIUM_SOFT_MEDIUM:
+  - text: "Move freely without tension."
+    why: "Relaxed movement is easier to repeat."
+
+MEDIUM_SOFT_GOOD:
+  - text: "Keep the action easy."
+    why: "Efficiency comes from simplicity."
+
+GOOD_STRONG_LOW:
+  - text: "Let strength flow through the body."
+    why: "Avoid forcing movement."
+
+GOOD_STRONG_MEDIUM:
+  - text: "Stay tall and flowing."
+    why: "This balances strength and control."
+
+GOOD_STRONG_GOOD:
+  - text: "Trust the movement."
+    why: "Strong and well supported."
+
+GOOD_BALANCED_LOW:
+  - text: "Maintain posture throughout."
+    why: "Good shape protects consistency."
+
+GOOD_BALANCED_MEDIUM:
+  - text: "Keep the action natural."
+    why: "Balanced motion reduces strain."
+
+GOOD_BALANCED_GOOD:
+  - text: "Repeat the same smooth action."
+    why: "This is an efficient pattern."
+
+GOOD_SOFT_LOW:
+  - text: "Stay relaxed and aligned."
+    why: "Ease helps control."
+
+GOOD_SOFT_MEDIUM:
+  - text: "Move freely."
+    why: "Simple movement works best."
+
+GOOD_SOFT_GOOD:
+  - text: "Keep doing what feels easy."
+    why: "This is a stable pattern."

@@ -279,3 +279,13 @@ def run(ctx: Context) -> Context:
         log(f"[ERROR] BiomechStage: {e}")
         return ctx
 
+
+        # ------------------------------------------------------------
+        # CUES (interpretation layer — Phase-1)
+        # ------------------------------------------------------------
+        try:
+            from app.cues.cue_engine import build_cues
+            ctx.cues = build_cues(ctx)
+        except Exception as e:
+            log(f"[WARN] Cue engine skipped: {e}")
+            ctx.cues = {"list": []}

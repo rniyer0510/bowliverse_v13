@@ -1,0 +1,48 @@
+version: 1.0
+type: 3P3
+
+dimensions:
+  posture: [GOOD, MEDIUM, LOW]
+  power: [SOFT, BALANCED, STRONG]
+  protection: [GOOD, MEDIUM, LOW]
+
+states:
+  - id: GOOD_STRONG_GOOD
+    posture: GOOD
+    power: STRONG
+    protection: GOOD
+
+  - id: GOOD_STRONG_MEDIUM
+    posture: GOOD
+    power: STRONG
+    protection: MEDIUM
+
+  - id: GOOD_STRONG_LOW
+    posture: GOOD
+    power: STRONG
+    protection: LOW
+
+  - id: MEDIUM_STRONG_LOW
+    posture: MEDIUM
+    power: STRONG
+    protection: LOW
+
+  - id: LOW_STRONG_LOW
+    posture: LOW
+    power: STRONG
+    protection: LOW
+
+  - id: LOW_BALANCED_LOW
+    posture: LOW
+    power: BALANCED
+    protection: LOW
+
+  - id: MEDIUM_BALANCED_LOW
+    posture: MEDIUM
+    power: BALANCED
+    protection: LOW
+
+  - id: GOOD_BALANCED_LOW
+    posture: GOOD
+    power: BALANCED
+    protection: LOW

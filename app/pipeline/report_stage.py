@@ -2,10 +2,15 @@
 
 from typing import Any, Dict, List
 from app.models.context import Context
+from app.explainability.p3_engine import P3Engine
 
 REPORT_SCHEMA_VERSION = "1.0"
+REPORT_FULL_SCHEMA = "report_full.v1"
 
 
+# ---------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------
 def as_dict(obj: Any) -> Dict:
     if obj is None:
         return {}
@@ -43,6 +48,9 @@ def classify_legality(extension_deg: float | None) -> str:
     return "ILLEGAL"
 
 
+# ---------------------------------------------------------
+# Main Report Builder
+# ---------------------------------------------------------
 def run(ctx: Context) -> Context:
     report: Dict[str, Any] = {"schema_version": REPORT_SCHEMA_VERSION}
 
@@ -55,19 +63,32 @@ def run(ctx: Context) -> Context:
     extension = elbow.get("extension_deg")
 
     # -------------------------------------------------
-    # Summary
+    # Core legality + P3 computation
     # -------------------------------------------------
     legality = classify_legality(extension)
 
+    p3_engine = P3Engine()
+    p3 = p3_engine.compute(
+        biomech=biomech,
+        risks=risk,
+        context=as_dict(getattr(ctx, "context", None)),
+    )
+
+    # -------------------------------------------------
+    # Frontend Summary (minimal, stable)
+    # -------------------------------------------------
     report["summary"] = {
-        "legality": legality,
-        "risk": risk.get("overall", "UNKNOWN"),
         "action_type": action_matrix.get("action", "UNKNOWN"),
+        "legality": legality,
+        "overall_risk": risk.get("overall", "UNKNOWN"),
+        "posture": p3.get("posture", {}).get("label"),
+        "power": p3.get("power", {}).get("label"),
+        "protection": p3.get("protection", {}).get("label"),
         "confidence_pct": float(biomech.get("elbow_conf") or 0.0),
     }
 
     # -------------------------------------------------
-    # Posture table
+    # Posture Table (UI-friendly, derived)
     # -------------------------------------------------
     posture_table: List[Dict[str, str]] = []
 
@@ -108,34 +129,22 @@ def run(ctx: Context) -> Context:
     report["posture_table"] = posture_table
 
     # -------------------------------------------------
-    # Interpretation
+    # Interpretation (derived, neutral)
     # -------------------------------------------------
-    notes = [
-        "Elbow legality is classified using ActionLab thresholds: <18° (Legal), 18–22° (Borderline), >22° (Illegal).",
-        "Posture indicators highlight potential risk patterns, not injury diagnosis.",
-        "Confidence depends on camera angle and landmark visibility.",
-    ]
-
-    if legality == "BORDERLINE":
-        notes.append(
-            "Borderline elbow extension suggests the action is close to the acceptable limit and should be reviewed with a coach."
-        )
-
-    if legality == "ILLEGAL":
-        notes.append(
-            "Elbow extension exceeds acceptable limits and requires corrective intervention."
-        )
-
     report["interpretation"] = {
         "summary_text": (
-            "This report summarizes bowling action legality, posture alignment, "
-            "and potential stress indicators using biomechanical checkpoints."
+            "This report summarizes bowling action characteristics using "
+            "Posture, Power, and Protection indicators derived strictly "
+            "from biomechanical and risk signals."
         ),
-        "notes": notes,
+        "notes": [
+            "All interpretations are derived from measured biomechanical data.",
+            "No coaching advice is generated without supporting evidence.",
+        ],
     }
 
     # -------------------------------------------------
-    # Explainability
+    # Explainability (audit layer)
     # -------------------------------------------------
     report["explainability"] = {
         "confidence_source": "elbow_conf",
@@ -143,6 +152,123 @@ def run(ctx: Context) -> Context:
         "legality_rule": "<18° LEGAL | 18–22° BORDERLINE | >22° ILLEGAL",
         "posture_inputs_used": ["backfoot", "hip", "shoulder", "shoulder_hip"],
         "action_matrix_quality": action_matrix.get("quality"),
+    }
+
+    # -------------------------------------------------
+    # 3P3 (compact, frontend-ready)
+    # -------------------------------------------------
+    report["p3"] = p3
+
+    # -------------------------------------------------
+    # Full Report (PDF / audit / long-form)
+    # -------------------------------------------------
+    risks_breakdown = risk.get("breakdown", [])
+
+    evaluated = []
+    suppressed = []
+
+    for r in risks_breakdown:
+        if r.get("status") == "SKIPPED":
+            suppressed.append({
+                "risk": r.get("id"),
+                "reason": r.get("summary"),
+            })
+        else:
+            evaluated.append({
+                "risk": r.get("id"),
+                "level": r.get("level"),
+                "summary": r.get("summary"),
+            })
+
+    report["report_full"] = {
+        "meta": {
+            "schema": REPORT_FULL_SCHEMA,
+            "model": "ActionLab Phase-1",
+            "action_type": action_matrix.get("action"),
+            "analysis_confidence_pct": float(biomech.get("elbow_conf") or 0.0),
+        },
+
+        "executive_summary": {
+            "posture": p3.get("posture", {}).get("label"),
+            "power": p3.get("power", {}).get("label"),
+            "protection": p3.get("protection", {}).get("label"),
+            "overall_risk": risk.get("overall"),
+            "limiting_factors": (
+                p3.get("posture", {}).get("signals", [])
+                + p3.get("power", {}).get("signals", [])
+            ),
+        },
+
+        "legality": {
+            "verdict": legality,
+            "uah_angle_deg": elbow.get("uah_angle"),
+            "release_angle_deg": elbow.get("release_angle"),
+            "computed_extension_deg": elbow.get("extension_deg"),
+            "peak_extension_angle_deg": elbow.get("peak_extension_angle_deg"),
+            "confidence_pct": float(biomech.get("elbow_conf") or 0.0),
+            "error_margin_deg": elbow.get("extension_error_margin_deg"),
+        },
+
+        "posture_components": [
+            {
+                "name": "Back-Foot",
+                "angle_deg": backfoot.get("landing_angle_deg"),
+                "zone": backfoot.get("zone"),
+            },
+            {
+                "name": "Hip",
+                "angle_deg": hip.get("angle_deg"),
+                "zone": hip.get("zone"),
+            },
+            {
+                "name": "Shoulder",
+                "angle_deg": shoulder.get("angle_deg"),
+                "zone": shoulder.get("zone"),
+            },
+            {
+                "name": "Hip–Shoulder Separation",
+                "angle_deg": shoulder_hip.get("separation_deg"),
+                "zone": shoulder_hip.get("zone"),
+            },
+        ],
+
+        "power_metrics": {
+            "intensity_scalar_I": p3.get("intensity"),
+            "front_foot_braking_index": next(
+                (r.get("evidence", {}).get("braking_index")
+                 for r in risks_breakdown
+                 if r.get("id") == "FRONT_FOOT_BRAKING"),
+                None,
+            ),
+        },
+
+        "protection": {
+            "evaluated": evaluated,
+            "suppressed": suppressed,
+        },
+
+        "guidance": {
+            "primary_cues": as_dict(ctx.cues).get("list", []),
+            "focus_areas": (
+                p3.get("posture", {}).get("signals", [])
+                + p3.get("power", {}).get("signals", [])
+            ),
+            "observed_risks": [
+                r.get("id")
+                for r in risks_breakdown
+                if r.get("level") in ("LOW", "MEDIUM", "HIGH")
+            ],
+        },
+
+        "audit": {
+            "events": ["BFC", "FFC", "UAH", "RELEASE"],
+            "guardrails": [
+                "Unified intensity scalar (pace & spin agnostic)",
+                "Signal-quality gating",
+                "Derived-only interpretation",
+                "Raw risk preserved separately from report interpretation",
+            ],
+        },
     }
 
     ctx.report = report
