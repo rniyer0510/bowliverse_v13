@@ -21,3 +21,17 @@ venv*/
 
 # Videos uploaded for testing
 /tmp/
+
+# --- ActionLab local / experimental ---
+app/config/action_bands.py
+app/pipeline/action_classifier.py
+app/pipeline/decision_stage.py
+
+# Backup / temp files
+*.1222
+*.bak
+*.tmp
+
+# Local clips
+clips/*.mp4
+clips/*.mov
