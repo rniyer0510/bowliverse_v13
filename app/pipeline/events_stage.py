@@ -4,10 +4,12 @@ Bowliverse v13.8 — EVENTS STAGE (C-2 Adaptive UAH + Reverse FFC)
 --------------------------------------------------------------
 
 Design rules:
-- Canonical order: Release → UAH → FFC → BFC
+- Canonical order (reverse-anchored): BFC → FFC → UAH → Release
 - Release is the most reliable anchor
 - UAH refined using flexion + elevation + rotation (C-2)
 - FFC detected in REVERSE, anchored at UAH
+- BFC derived conservatively in reverse (placeholder; refined later)
+- Unified analysis window is constructed ONCE and passed downstream
 - No executable logic at module scope
 """
 
@@ -17,7 +19,6 @@ import numpy as np
 from app.models.context import Context
 from app.models.events_model import EventFrame
 from app.utils.landmarks import LandmarkMapper
-
 from app.pipeline.ffc_reverse import detect_ffc_reverse
 
 
@@ -185,13 +186,17 @@ def run(ctx: Context) -> Context:
         if len(valid) >= 5:
             pose_frames = valid
 
-        # Release
+        # -------------------------
+        # Release (anchor)
+        # -------------------------
         release = detect_release(pose_frames, mapper)
         if release is None:
             ctx.events.error = "Release not found"
             return ctx
 
-        # UAH
+        # -------------------------
+        # UAH (reverse-bounded)
+        # -------------------------
         uah = detect_uah_c2(pose_frames, mapper, release.frame)
         if uah is None:
             uah = EventFrame(frame=max(0, release.frame - 6), conf=10.0)
@@ -199,9 +204,9 @@ def run(ctx: Context) -> Context:
         if uah.frame >= release.frame:
             uah.frame = max(0, release.frame - 3)
 
-        # -------------------------------------------------
-        # FFC — reverse, STABILITY-BASED (anchored at UAH)
-        # -------------------------------------------------
+        # -------------------------
+        # FFC — reverse (anchored at UAH)
+        # -------------------------
         ffc = detect_ffc_reverse(
             pose_frames=pose_frames,
             anchor_idx=uah.frame,
@@ -211,14 +216,45 @@ def run(ctx: Context) -> Context:
         if ffc is None:
             ffc = EventFrame(frame=max(0, uah.frame - 6), conf=10.0)
 
-        # BFC (optional / legacy placeholder)
+        # -------------------------
+        # BFC — minimal reverse placeholder
+        # -------------------------
         bfc = None
+        if ffc and ffc.frame > 3:
+            bfc = EventFrame(
+                frame=max(0, ffc.frame - 8),
+                conf=10.0
+            )
 
+        # -------------------------
+        # Unified analysis window
+        # -------------------------
+        analysis_window = {
+            "bfc": bfc.frame if bfc else None,
+            "ffc": ffc.frame if ffc else None,
+            "uah": uah.frame,
+            "release": release.frame,
+        }
+
+        # Hard invariant — NEVER relax
+        if None not in analysis_window.values():
+            assert (
+                analysis_window["bfc"]
+                < analysis_window["ffc"]
+                < analysis_window["uah"]
+                < analysis_window["release"]
+            ), f"Invalid reverse window ordering: {analysis_window}"
+
+        # -------------------------
+        # Commit to context
+        # -------------------------
         ctx.events.release = release
         ctx.events.uah = uah
         ctx.events.ffc = ffc
         ctx.events.bfc = bfc
+        ctx.events.window = analysis_window
         ctx.events.error = None
+
         return ctx
 
     except Exception as e:

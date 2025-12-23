@@ -1,85 +1,80 @@
+# app/pipeline/backfoot_landing_angle.py
+
 import numpy as np
-from app.models.context import Context
-from app.models.events_model import EventFrame
+from math import atan2, degrees
+from app.utils.landmarks import LandmarkMapper
 from app.utils.logger import log
 
 
-def _angle_2d(v):
-    """Angle of vector in X–Z plane (degrees)."""
-    x, z = v[0], v[2]
-    return float(np.degrees(np.arctan2(z, x)))
+def weighted_stats(values, weights):
+    if not values:
+        return None, None
+    v = np.array(values, dtype=float)
+    w = np.array(weights, dtype=float)
+    s = np.sum(w)
+    if s <= 0:
+        return None, None
+    mean = np.sum(w * v) / s
+    var = np.sum(w * (v - mean) ** 2) / s
+    return float(mean), float(np.sqrt(var))
 
 
-def run(ctx: Context) -> None:
+def run(ctx, window=5, vis_min=0.5):
     """
-    Back Foot Contact (BFC) landing angle.
-    Reverse search anchored at FFC.
+    Back-foot landing angle at BFC.
+
+    Notes:
+    - Pure measurement stage
+    - NO zoning or semantic interpretation here
+    - Toe → heel vector
+    - Interpretation happens downstream
     """
 
-    if not ctx.events or not ctx.events.ffc:
+    evt = ctx.events.bfc
+    if not evt:
         return
 
-    pose_frames = ctx.pose.frames
-    ffc_idx = ctx.events.ffc.frame
+    mapper = LandmarkMapper(ctx.input.hand)
+    frames = ctx.pose.frames
 
-    if ffc_idx <= 1 or ffc_idx >= len(pose_frames):
+    angles = []
+    weights = []
+
+    for i in range(
+        max(0, evt.frame - window),
+        min(len(frames), evt.frame + window + 1),
+    ):
+        pf = frames[i]
+        if pf.landmarks is None:
+            continue
+
+        try:
+            toe = mapper.vec(pf.landmarks, "toe")
+            heel = mapper.vec(pf.landmarks, "heel")
+            vis = min(
+                pf.landmarks[mapper.primary["toe"]]["vis"],
+                pf.landmarks[mapper.primary["heel"]]["vis"],
+            )
+        except Exception:
+            continue
+
+        if vis < vis_min:
+            continue
+
+        ang = degrees(atan2(toe[1] - heel[1], toe[0] - heel[0]))
+        angles.append(ang)
+        weights.append(vis)
+
+    mean, std = weighted_stats(angles, weights)
+    if mean is None:
+        log("[WARN] Backfoot landing angle skipped: insufficient data")
         return
-
-    # MediaPipe indices
-    if ctx.input.hand == "R":
-        ANKLE, HEEL, TOE = 28, 30, 32
-    else:
-        ANKLE, HEEL, TOE = 27, 29, 31
-
-    ankle_y = []
-    for i in range(ffc_idx):
-        lm = pose_frames[i].landmarks
-        ankle_y.append(float(lm[ANKLE]["y"]) if lm else 1.0)
-
-    ground_thresh = np.percentile(ankle_y, 10)
-
-    bfc_frame = None
-    for i in range(ffc_idx - 1, 1, -1):
-        if ankle_y[i] <= ground_thresh and ankle_y[i - 1] > ground_thresh:
-            bfc_frame = i
-            break
-
-    if bfc_frame is None:
-        log("[WARN] BFC landing not detected")
-        return
-
-    pf = pose_frames[bfc_frame]
-    if pf.landmarks is None:
-        return
-
-    lm = pf.landmarks
-    heel = np.array([lm[HEEL]["x"], lm[HEEL]["y"], lm[HEEL]["z"]])
-    toe = np.array([lm[TOE]["x"], lm[TOE]["y"], lm[TOE]["z"]])
-
-    angle = abs(_angle_2d(toe - heel))
-
-    if angle < 25:
-        zone = "CLOSED"
-    elif angle < 45:
-        zone = "NEUTRAL"
-    elif angle < 65:
-        zone = "OPEN"
-    else:
-        zone = "VERY_OPEN"
-
-    # Correct reverse-anchored event write
-    ctx.events.bfc = EventFrame(
-        frame=bfc_frame,
-        conf=float(ctx.events.ffc.conf),
-    )
 
     ctx.biomech.backfoot = {
-        "landing_angle_deg": round(angle, 2),
-        "zone": zone,
-        "confidence": round(float(ctx.events.ffc.conf), 2),
-        "frame": bfc_frame,
-        "type": "touch",
+        "angle_deg": round(mean, 2),
+        "uncertainty_deg": round(std or 0.0, 2),
+        "support_frames": len(angles),
+        "frame": evt.frame,
+        "confidence": evt.conf,
     }
-
-    log(f"[DEBUG] BFC @frame={bfc_frame}, angle={angle:.2f}, zone={zone}")
 

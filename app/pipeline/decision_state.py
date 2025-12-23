@@ -1,40 +1,27 @@
 # app/pipeline/decision_state.py
 """
-ActionLab / Bowliverse v13.9 — DECISION STATE
+ActionLab / Bowliverse v13.x — DECISION STATE (READ-ONLY)
 
 Purpose:
-- Consolidate ALL downstream interpretation into a single snapshot
-- This is the object the frontend should consume
-- No computation here — aggregation only
-
-Inputs:
-- ctx.events
-- ctx.biomech
-- ctx.decision.action_matrix
-- ctx.risk
-- ctx.cues
-
-Outputs:
-- ctx.decision.state
+- Consolidate downstream interpretation into a single snapshot
+- MUST NOT compute action classification
+- Action classification is produced upstream in pipeline
 """
 
 from app.models.context import Context
 
 
-# ---------------------------------------------------------
-# MAIN
-# ---------------------------------------------------------
 def run(ctx: Context) -> None:
     """
-    Builds a unified decision state for frontend & reports.
+    Builds a unified decision snapshot for frontend & reports.
     """
 
     ctx.decision.state = {
         "events": _safe_events(ctx),
         "biomechanics": _safe_biomech(ctx),
-        "action": _safe_action(ctx),
-        "risk": ctx.risk if hasattr(ctx, "risk") else None,
-        "cues": ctx.cues.list if hasattr(ctx, "cues") else [],
+        "action": ctx.decision.action_matrix,
+        "risk": ctx.risk,
+        "cues": ctx.cues.list,
     }
 
 
@@ -50,6 +37,7 @@ def _safe_events(ctx: Context):
         "release": _frame(ev.release),
         "uah": _frame(ev.uah),
         "ffc": _frame(ev.ffc),
+        "bfc": _frame(ev.bfc),
     }
 
 
@@ -60,17 +48,12 @@ def _safe_biomech(ctx: Context):
 
     return {
         "hip": b.hip,
+        "shoulder": b.shoulder,
         "shoulder_hip": b.shoulder_hip,
         "backfoot": b.backfoot,
         "elbow": b.elbow,
         "release_height": b.release_height,
     }
-
-
-def _safe_action(ctx: Context):
-    if not ctx.decision or not ctx.decision.action_matrix:
-        return None
-    return ctx.decision.action_matrix
 
 
 def _frame(ev):

@@ -40,9 +40,12 @@ async def analyze(
     ctx = pose_stage(ctx)
     ctx = events_stage(ctx)
     ctx = biomech_stage(ctx)
+
+    # ✅ TARGET-2 ACTION CLASSIFICATION
     action_matrix(ctx)
-    risk_engine(ctx)
-    cues_engine(ctx)
+
+    ctx = risk_engine(ctx)
+    ctx = cues_engine(ctx)
     ctx = report_stage(ctx)
 
     return ctx.model_dump(
@@ -52,3 +55,4 @@ async def analyze(
         },
         exclude_none=True,
     )
+

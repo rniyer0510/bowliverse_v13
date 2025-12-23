@@ -1,69 +1,111 @@
 # app/pipeline/action_matrix.py
+"""
+Target-2: Action Classification (Priority-1)
 
-from app.models.context import Context
+Principles:
+- Hip = primary anchor
+- Back-foot = secondary anchor (can be soft-weighted)
+- Shoulder = descriptive only (energy transfer)
+- Never force classification on weak evidence
+"""
+
+from typing import Dict
 
 
-def run(ctx: Context) -> None:
-    """
-    Stores result in ctx.decision.action_matrix
+# -----------------------------
+# Tunables (design-level)
+# -----------------------------
+MIN_BACKFOOT_SUPPORT = 8
+MAX_BACKFOOT_UNCERTAINTY = 35.0
 
-    Lower-half dominant logic:
-    - Hip + Backfoot decide ACTION
-    - Shoulder–hip separation modifies QUALITY only
-    """
+MIN_HIP_SUPPORT = 6
 
-    hip = ctx.biomech.hip.get("zone") if ctx.biomech.hip else None
-    sh = ctx.biomech.shoulder_hip.get("zone") if ctx.biomech.shoulder_hip else None
-    bf = ctx.biomech.backfoot.get("zone") if ctx.biomech.backfoot else None
 
-    # ---------------------------------------------
-    # Graceful degradation
-    # ---------------------------------------------
-    if not hip or not bf:
-        ctx.decision.action_matrix = {
-            "action": "INSUFFICIENT_DATA",
-            "quality": "UNKNOWN",
-            "inputs": {"hip": hip, "shoulder_hip": sh, "backfoot": bf},
-        }
+def run(ctx) -> None:
+    b = ctx.biomech
+    out = {
+        "action": "INSUFFICIENT_DATA",
+        "confidence_pct": 0,
+        "basis": {},
+    }
+
+    if not b:
+        ctx.decision.action_matrix = out
         return
 
-    # ---------------------------------------------
-    # STEP 1: BASE ACTION (LOWER HALF ONLY)
-    # ---------------------------------------------
-    if hip == "FRONT_ON" and bf in ("OPEN", "VERY_OPEN", "NEUTRAL"):
-        action = "FRONT_ON"
+    hip = getattr(b, "hip", None)
+    backfoot = getattr(b, "backfoot", None)
 
-    elif hip == "SIDE_ON" and bf == "CLOSED":
-        action = "SIDE_ON"
+    # -----------------------------
+    # HIP evaluation (primary)
+    # -----------------------------
+    hip_state = "AMBIGUOUS"
+    hip_ok = False
 
-    else:
-        action = "MIXED"
+    if hip:
+        support = hip.get("support_frames", 0)
+        angle = hip.get("angle_deg")
 
-    # ---------------------------------------------
-    # STEP 2: QUALITY MODULATION (UPPER HALF)
-    # ---------------------------------------------
-    quality = "OK"
+        if support >= MIN_HIP_SUPPORT and angle is not None:
+            hip_ok = True
+            if abs(angle) < 35:
+                hip_state = "OPEN"
+            else:
+                hip_state = "CLOSED"
 
-    if sh == "LOW":
-        quality = "SUBOPTIMAL"
+    out["basis"]["hip"] = hip_state
 
-    elif sh == "HIGH":
-        quality = "OPTIMAL"
+    # -----------------------------
+    # BACK-FOOT evaluation (soft)
+    # -----------------------------
+    bf_state = "AMBIGUOUS"
+    bf_soft_ok = False
 
-    # Mixed action is always higher risk
-    if action == "MIXED":
-        quality = "HIGH_RISK"
+    if backfoot:
+        bf_support = backfoot.get("support_frames", 0)
+        bf_unc = backfoot.get("uncertainty_deg", 999)
+        bf_angle = backfoot.get("angle_deg")
 
-    # ---------------------------------------------
-    # STORE RESULT
-    # ---------------------------------------------
-    ctx.decision.action_matrix = {
-        "action": action,
-        "quality": quality,
-        "inputs": {
-            "hip": hip,
-            "shoulder_hip": sh,
-            "backfoot": bf,
-        },
-    }
+        if (
+            bf_support >= MIN_BACKFOOT_SUPPORT
+            and bf_unc <= MAX_BACKFOOT_UNCERTAINTY
+            and bf_angle is not None
+        ):
+            bf_soft_ok = True
+            # toe facing batsman ≈ closed
+            if bf_angle > 90:
+                bf_state = "CLOSED"
+            else:
+                bf_state = "OPEN"
+
+    out["basis"]["backfoot"] = bf_state
+
+    # -----------------------------
+    # Action resolution
+    # -----------------------------
+    if hip_ok:
+        if hip_state == "OPEN" and bf_soft_ok:
+            if bf_state == "OPEN":
+                out["action"] = "FRONT_ON"
+                out["confidence_pct"] = 55
+            else:
+                out["action"] = "MIXED"
+                out["confidence_pct"] = 45
+
+        elif hip_state == "CLOSED" and bf_soft_ok:
+            if bf_state == "CLOSED":
+                out["action"] = "SIDE_ON"
+                out["confidence_pct"] = 55
+            else:
+                out["action"] = "MIXED"
+                out["confidence_pct"] = 45
+
+        else:
+            # Hip-only fallback (explicitly low confidence)
+            out["action"] = (
+                "FRONT_ON" if hip_state == "OPEN" else "SIDE_ON"
+            )
+            out["confidence_pct"] = 35
+
+    ctx.decision.action_matrix = out
 
